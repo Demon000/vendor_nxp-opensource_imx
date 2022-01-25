@@ -262,6 +262,9 @@ status_t CameraDeviceHwlImpl::initSensorStaticData()
     int previewCnt = 0, pictureCnt = 0;
     struct v4l2_frmsizeenum cam_frmsize;
     struct v4l2_frmivalenum vid_frmval;
+    char value[PROPERTY_VALUE_MAX] = {0};
+
+    property_get("ro.build.product", value, "0");
     while (ret == 0) {
         memset(TmpStr, 0, 20);
         memset(&cam_frmsize, 0, sizeof(struct v4l2_frmsizeenum));
@@ -308,6 +311,9 @@ status_t CameraDeviceHwlImpl::initSensorStaticData()
             mPreviewResolutions[previewCnt++] = cam_frmsize.discrete.width;
             mPreviewResolutions[previewCnt++] = cam_frmsize.discrete.height;
         }
+
+        if(cam_frmsize.discrete.height == 720 && (strncasecmp("som_mx8mn", value, strlen(value)) == 0))
+            break;
     }  // end while
 
     mPreviewResolutionCount = previewCnt;
