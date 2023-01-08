@@ -514,6 +514,12 @@ Status getTypeCPortNamesHelper(std::unordered_map<std::string, bool> *names) {
   DIR *dp;
   bool has_typec_port = false;
 
+  /* Enable Typ USB Legacy Support via vendor.typec.legacy property */
+  if (property_get_bool("vendor.typec.legacy", false)) {
+    ALOGE("Force Legacy device enabled");
+    return Status::ERROR;
+  }
+
   dp = opendir("/sys/class/typec");
   if (dp != NULL) {
     struct dirent *ep;
