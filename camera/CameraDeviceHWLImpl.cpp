@@ -56,10 +56,6 @@ std::unique_ptr<CameraDeviceHwl> CameraDeviceHwlImpl::Create(
         return nullptr;
     }
 
-    ctrl_fd = open(*mDevPath[0], O_RDWR);
-    if (ctrl_fd < 0) {
-	ALOGE("%s invalid fd handle", __func__);
-    }
     ALOGI("%s: Created CameraDeviceHwlImpl for camera %u", __func__, device->camera_id_);
 
     return std::unique_ptr<CameraDeviceHwl>(device);
@@ -76,8 +72,6 @@ CameraDeviceHwlImpl::CameraDeviceHwlImpl(
         mUseCpuEncoder(use_cpu_encoder),
         physical_device_map_(std::move(physical_devices))
 {
-    if (ctrl_fd > 0)
-       close(ctrl_fd);
     mDevPath = devPaths;
     for (int i = 0; i < (int)mDevPath.size(); ++i) {
         ALOGI("%s, mDevPath[%d] %s", __func__, i, *mDevPath[i]);
@@ -98,12 +92,18 @@ CameraDeviceHwlImpl::CameraDeviceHwlImpl(
 
     memset(mPreviewResolutions, 0, sizeof(mPreviewResolutions));
     memset(mPictureResolutions, 0, sizeof(mPictureResolutions));
+    ctrl_fd = open(*mDevPath[0], O_RDWR);
+    if (ctrl_fd < 0) {
+        ALOGE("%s invalid fd handle", __func__);
+    }
     memset(&caps_supports, 0, sizeof(caps_supports));
     m_raw_v4l2_format = -1;
 }
 
 CameraDeviceHwlImpl::~CameraDeviceHwlImpl()
 {
+    if (ctrl_fd > 0)
+       close(ctrl_fd);
     if(m_meta) {
         delete m_meta;
         m_meta = NULL;
