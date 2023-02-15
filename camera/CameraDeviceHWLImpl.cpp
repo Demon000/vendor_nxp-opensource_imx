@@ -56,6 +56,10 @@ std::unique_ptr<CameraDeviceHwl> CameraDeviceHwlImpl::Create(
         return nullptr;
     }
 
+    ctrl_fd = open(*mDevPath[0], O_RDWR);
+    if (ctrl_fd < 0) {
+	ALOGE("%s invalid fd handle", __func__);
+    }
     ALOGI("%s: Created CameraDeviceHwlImpl for camera %u", __func__, device->camera_id_);
 
     return std::unique_ptr<CameraDeviceHwl>(device);
@@ -72,6 +76,8 @@ CameraDeviceHwlImpl::CameraDeviceHwlImpl(
         mUseCpuEncoder(use_cpu_encoder),
         physical_device_map_(std::move(physical_devices))
 {
+    if (ctrl_fd > 0)
+       close(ctrl_fd);
     mDevPath = devPaths;
     for (int i = 0; i < (int)mDevPath.size(); ++i) {
         ALOGI("%s, mDevPath[%d] %s", __func__, i, *mDevPath[i]);
@@ -218,11 +224,10 @@ status_t CameraDeviceHwlImpl::Initialize()
 
 status_t CameraDeviceHwlImpl::initSensorStaticData()
 {
-    int32_t fd = open(*mDevPath[0], O_RDWR);
-
+    int32_t fd = ctrl_fd;
     if (fd < 0) {
-        ALOGE("ImxCameraCameraDevice: initParameters sensor has not been opened");
-        return BAD_VALUE;
+	    ALOGE("ImxCameraCameraDevice: initParameters sensor has not been opened");
+	    return BAD_VALUE;
     }
 
     // first read sensor format.
@@ -326,7 +331,6 @@ status_t CameraDeviceHwlImpl::initSensorStaticData()
     setMaxPictureResolutions();
     ALOGI("mMaxWidth:%d, mMaxHeight:%d", mMaxWidth, mMaxHeight);
 
-    close(fd);
     return NO_ERROR;
 }
 

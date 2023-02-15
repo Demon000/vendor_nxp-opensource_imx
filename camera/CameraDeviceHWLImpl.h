@@ -85,6 +85,8 @@ public:
 
     CameraSensorMetadata* getSensorData() { return &mSensorData; }
 
+    int ctrl_fd;
+
     static bool StreamCombJudge(const StreamConfiguration& stream_config,
         int *pPreviewResolutions, int nPreviewResolutionCount, int *pPictureResolutions, int nPictureResolutionCount);
 

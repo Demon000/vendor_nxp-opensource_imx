@@ -36,6 +36,11 @@
 
 using namespace fsl;
 
+// Undefine u8 since the camera_metadata_ro_entry_t contains a u8 field
+#ifdef u8
+    #undef u8
+#endif
+
 namespace android {
 
 using google_camera_hal::CameraDeviceHwl;
@@ -237,6 +242,13 @@ private:
 
     VideoStream* GetVideoStreamByPhysicalId(uint32_t physical_id);
     PipelineInfo* GetPipelineInfo(uint32_t id);
+
+private:
+    CameraDeviceHwlImpl *m_dev;
+
+    uint8_t doAutoFocus(uint8_t mode);
+    uint8_t getAutoFocusStatus(uint8_t mode);
+    void setAutoFocusRegion(int x, int y);
 
 private:
     class WorkThread : public Thread

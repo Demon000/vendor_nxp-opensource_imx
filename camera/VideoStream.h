@@ -35,6 +35,10 @@ public:
     int32_t closeDev();
 //    int32_t flushDev();
 
+    int32_t getWidth() {return mWidth;}
+    int32_t getHeight() {return mHeight;}
+
+    bool af_supported;
     void setOmitFrameCount(uint32_t omitCount) { mOmitFrmCount = omitCount; }
 
     // get buffer from V4L2.

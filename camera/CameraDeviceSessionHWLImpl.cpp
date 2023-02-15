@@ -100,7 +100,7 @@ status_t CameraDeviceSessionHwlImpl::Initialize(
 {
     int ret;
     camera_id_ = camera_id;
-
+    m_dev = pDev;
     static_metadata_ = std::move(pMeta);
 
     if (pDev == NULL)
@@ -125,19 +125,24 @@ status_t CameraDeviceSessionHwlImpl::Initialize(
 
         if (strstr(cam_metadata->camera_name, UVC_NAME)) {
             pVideoStreams[i] = new UvcStream(*mDevPath[i], this);
+            pVideoStreams[i]->af_supported = false;
         } else if(strstr(cam_metadata->camera_name, ISP_SENSOR_NAME)) {
             pVideoStreams[i] = new ISPCameraMMAPStream(this);
+            pVideoStreams[i]->af_supported = false;
             ((ISPCameraMMAPStream *)pVideoStreams[i])->createISPWrapper(*mDevPath[i], &mSensorData);
         } else if (cam_metadata->buffer_type == CameraSensorMetadata::kMmap) {
             pVideoStreams[i] = new MMAPStream(this);
+            pVideoStreams[i]->af_supported = false;
         } else if (cam_metadata->buffer_type == CameraSensorMetadata::kDma) {
             pVideoStreams[i] = new DMAStream((bool)cam_metadata->mplane, this);
+	    pVideoStreams[i]->af_supported = true;
         } else {
             ALOGE("%s: unsupported camera %s, or unsupported buffer type %d", __func__, cam_metadata->camera_name, cam_metadata->buffer_type);
             return BAD_VALUE;
         }
 
-        ALOGI("%s: VideoStream[%d] %p created, device path %s", __func__, i, pVideoStreams[i], *mDevPath[i]);
+        ALOGE("%s: VideoStream[%d] %p created, device path %s", __func__, i, pVideoStreams[i], *mDevPath[i]);
+        ALOGE("%s: cam_metadata->camera_name %s  af_supported=%d", __func__, cam_metadata->camera_name, pVideoStreams[i]->af_supported);
 
         if (pVideoStreams[i] == NULL)
             return BAD_VALUE;
@@ -1332,17 +1337,58 @@ status_t CameraDeviceSessionHwlImpl::HandleMetaLocked(std::unique_ptr<HalCameraM
 
     resultMeta->Set(ANDROID_CONTROL_AE_PRECAPTURE_ID, &m3aState.aeTriggerId, 1);
 
-    ret = resultMeta->Get(ANDROID_CONTROL_AF_TRIGGER_ID, &entry);
-    if (ret != NAME_NOT_FOUND) {
-        m3aState.afTriggerId = entry.data.i32[0];
-    }
-
-    resultMeta->Set(ANDROID_CONTROL_AF_TRIGGER_ID, &m3aState.afTriggerId, 1);
-
     resultMeta->Set(ANDROID_SENSOR_TIMESTAMP, (int64_t *)&timestamp, 1);
 
     // auto focus control.
-    m3aState.afState = ANDROID_CONTROL_AF_STATE_INACTIVE;
+    resultMeta->Get(ANDROID_CONTROL_AF_MODE, &entry);
+    if (entry.count == 0) {
+        ALOGE("%s: No AF mode entry!", __FUNCTION__);
+        return BAD_VALUE;
+    }
+    uint8_t afMode = (entry.count > 0) ?
+        entry.data.u8[0] : (uint8_t)ANDROID_CONTROL_AF_MODE_OFF;
+    ret = resultMeta->Get(ANDROID_CONTROL_AF_TRIGGER, &entry);
+    if (entry.count > 0) {
+        // save trigger value
+        uint8_t trigger = entry.data.u8[0];
+
+        // check if a ROI has been provided
+        ret = resultMeta->Get(ANDROID_CONTROL_AF_REGIONS, &entry);
+        if (entry.count > 0) {
+            int xavg = (entry.data.i32[0] + entry.data.i32[2]) / 2;
+            int yavg = (entry.data.i32[1] + entry.data.i32[3]) / 2;
+            ALOGV("%s: AF region: x %d y %d", __FUNCTION__, xavg, yavg);
+            setAutoFocusRegion(xavg, yavg);
+        }
+
+        // get and save trigger ID
+        ret = resultMeta->Get(ANDROID_CONTROL_AF_TRIGGER_ID, &entry);
+        if (entry.count > 0)
+            m3aState.afTriggerId = entry.data.i32[0];
+
+        // process trigger type
+        //ALOGV("trigger: %d afMode %d afTriggerId %d", trigger, afMode, m3aState.afTriggerId);
+        switch (trigger) {
+            case ANDROID_CONTROL_AF_TRIGGER_CANCEL:
+                // in case of continuous focus, cancel means to stop manual focus only
+                if ((afMode == ANDROID_CONTROL_AF_MODE_CONTINUOUS_VIDEO) ||
+                    (afMode == ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE))
+                    m3aState.afState = doAutoFocus(afMode);
+                break;
+            case ANDROID_CONTROL_AF_TRIGGER_START:
+                m3aState.afState = doAutoFocus(afMode);
+                break;
+            case ANDROID_CONTROL_AF_TRIGGER_IDLE:
+                m3aState.afState = ANDROID_CONTROL_AF_STATE_INACTIVE;
+                break;
+            default:
+                ALOGE("unknown trigger: %d", trigger);
+                m3aState.afState = ANDROID_CONTROL_AF_STATE_INACTIVE;
+        }
+    } else {
+        m3aState.afState = getAutoFocusStatus(afMode);
+    }
+    resultMeta->Set(ANDROID_CONTROL_AF_TRIGGER_ID, &m3aState.afTriggerId, 1);
     resultMeta->Set(ANDROID_CONTROL_AF_STATE, &m3aState.afState, 1);
 
     // auto white balance control.
@@ -1966,5 +2012,114 @@ int CameraDeviceSessionHwlImpl::getCapsMode(uint8_t sceneMode)
 
     return 0;
 }
+
+uint8_t CameraDeviceSessionHwlImpl::getAutoFocusStatus(uint8_t mode)
+{
+    struct v4l2_control c;
+    uint8_t ret = ANDROID_CONTROL_AF_STATE_INACTIVE;
+    int result;
+
+    int32_t fd = m_dev->ctrl_fd;
+    if (fd < 0) {
+        ALOGE("getAutoFocusStatus:couldn't open device");
+        return ret;
+    }
+
+    c.id = V4L2_CID_AUTO_FOCUS_STATUS;
+    result = ioctl(fd, VIDIOC_G_CTRL, &c);
+    if (result != 0) {
+        ALOGE("getAutoFocusStatus: ioctl error: %d", result);
+        goto end;
+   }
+
+    switch (c.value) {
+    case V4L2_AUTO_FOCUS_STATUS_BUSY:
+        if ((mode == ANDROID_CONTROL_AF_MODE_AUTO) ||
+            (mode == ANDROID_CONTROL_AF_MODE_MACRO))
+            ret = ANDROID_CONTROL_AF_STATE_ACTIVE_SCAN;
+        else
+            ret = ANDROID_CONTROL_AF_STATE_PASSIVE_SCAN;
+        break;
+    case V4L2_AUTO_FOCUS_STATUS_REACHED:
+        ret = ANDROID_CONTROL_AF_STATE_FOCUSED_LOCKED;
+        break;
+    case V4L2_AUTO_FOCUS_STATUS_FAILED:
+    case V4L2_AUTO_FOCUS_STATUS_IDLE:
+    default:
+        ret = ANDROID_CONTROL_AF_STATE_INACTIVE;
+    }
+end:
+    return ret;
+}
+
+#define OV5640_AF_ZONE_ARRAY_WIDTH	80
+void CameraDeviceSessionHwlImpl::setAutoFocusRegion(int x, int y)
+{
+    struct v4l2_control c;
+    int result;
+    /* Android provides coordinates scaled to max picture resolution */
+
+    for (int i = 0; i < mDevPath.size(); ++i) {
+	    if(pVideoStreams[i]->af_supported) {
+		    //    float ratio = (float)pVideoStream->getWidth() / pVideoStream->getHeight();
+		    float ratio = (float)pVideoStreams[i]->getWidth() / pVideoStreams[i]->getHeight();
+		    int scaled_x = x / (m_dev->mMaxWidth / OV5640_AF_ZONE_ARRAY_WIDTH);
+		    int scaled_y = y / (m_dev->mMaxHeight / (OV5640_AF_ZONE_ARRAY_WIDTH / ratio));
+		    int32_t fd = m_dev->ctrl_fd;
+		    if (fd < 0) {
+	        	ALOGE("setAutoFocusRegion:couldn't open device ");
+		        return;
+    		     }
+
+		    /* Using custom implementation of the absolute focus ioctl for ov5640 */
+		    c.id = V4L2_CID_FOCUS_ABSOLUTE;
+		    c.value = ((scaled_x & 0xFFFF) << 16) + (scaled_y & 0xFFFF);
+		    result = ioctl(fd, VIDIOC_S_CTRL, &c);
+		    if (result != 0)
+		        ALOGE("setAutoFocusRegion:ioctl s ctrl error: %d", result);
+	    }
+    }
+    return;
+}
+
+uint8_t CameraDeviceSessionHwlImpl::doAutoFocus(uint8_t mode)
+{
+    struct v4l2_control c;
+    uint8_t ret = ANDROID_CONTROL_AF_STATE_INACTIVE;
+    int result;
+
+    int32_t fd = m_dev->ctrl_fd;
+    if (fd < 0) {
+        ALOGE("doAutoFocus:couldn't open device ");
+        return ret;
+    }
+
+    switch (mode) {
+    case ANDROID_CONTROL_AF_MODE_AUTO:
+    case ANDROID_CONTROL_AF_MODE_MACRO:
+        ret = ANDROID_CONTROL_AF_STATE_ACTIVE_SCAN;
+        c.id = V4L2_CID_AUTO_FOCUS_START;
+        break;
+    case ANDROID_CONTROL_AF_MODE_CONTINUOUS_VIDEO:
+    case ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE:
+        ret = ANDROID_CONTROL_AF_STATE_PASSIVE_SCAN;
+        c.id = V4L2_CID_FOCUS_AUTO;
+        c.value = 1;
+        break;
+    case ANDROID_CONTROL_AF_MODE_OFF:
+    default:
+        ret = ANDROID_CONTROL_AF_STATE_INACTIVE;
+        c.id = V4L2_CID_AUTO_FOCUS_STOP;
+    }
+    result = ioctl(fd, VIDIOC_S_CTRL, &c);
+    if (result != 0) {
+        ALOGE("doAutoFocus: ioctl error: %d", result);
+        ret = ANDROID_CONTROL_AF_STATE_INACTIVE;
+    }
+
+
+    return ret;
+}
+
 
 }  // namespace android
