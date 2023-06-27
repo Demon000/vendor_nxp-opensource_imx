@@ -53,6 +53,7 @@ static const std::vector<sensors_supported_hal> sensors_supported = {
         SENSOR_SUPPORTED("mpl3115", SensorType::AMBIENT_TEMPERATURE),
         SENSOR_SUPPORTED("fxos8700", SensorType::ACCELEROMETER),
         SENSOR_SUPPORTED("fxos8700", SensorType::MAGNETIC_FIELD),
+        SENSOR_SUPPORTED("adxl355", SensorType::ACCELEROMETER),
 };
 #else
 static const std::vector<sensors_supported_hal> sensors_supported = {
