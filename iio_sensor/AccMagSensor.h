@@ -40,6 +40,7 @@ class AccMagSensor : public HWSensorBase {
   private:
     std::string mSysfspath;
     std::string freq_file_name;
+    float mScale;
     unique_fd fd_acc_x;
     unique_fd fd_acc_y;
     unique_fd fd_acc_z;

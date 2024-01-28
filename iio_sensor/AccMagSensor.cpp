@@ -29,6 +29,7 @@ AccMagSensor::AccMagSensor(int32_t sensorHandle, ISensorsEventCallback* callback
         mSensorInfo.maxRange = 39.20f;
         mSensorInfo.resolution = 0.01f;
         freq_file_name = "/in_accel_sampling_frequency_available";
+        mScale = 0.0005;
     } else if (iio_data.type == SensorType::MAGNETIC_FIELD) {
         mSensorInfo.power = 0.001f;
         mSensorInfo.maxRange = 900.00f;
@@ -56,14 +57,17 @@ AccMagSensor::AccMagSensor(int32_t sensorHandle, ISensorsEventCallback* callback
         static const char* IIO_ACC_X_RAW = "in_accel_x_raw";
         static const char* IIO_ACC_Y_RAW = "in_accel_y_raw";
         static const char* IIO_ACC_Z_RAW = "in_accel_z_raw";
+        static const char* IIO_ACC_SCALE = "in_accel_scale";
 
         std::string x_filename = mSysfspath + "/" + IIO_ACC_X_RAW;
         std::string y_filename = mSysfspath + "/" + IIO_ACC_Y_RAW;
         std::string z_filename = mSysfspath + "/" + IIO_ACC_Z_RAW;
+        std::string scale_filename = mSysfspath + "/" + IIO_ACC_SCALE;
 
         fd_acc_x = unique_fd(open(x_filename.c_str(), O_RDONLY));
         fd_acc_y = unique_fd(open(y_filename.c_str(), O_RDONLY));
         fd_acc_z = unique_fd(open(z_filename.c_str(), O_RDONLY));
+        sysfs_read_float(scale_filename, &mScale);
     } else if (mIioData.type == SensorType::MAGNETIC_FIELD) {
         static const char* IIO_MAG_X_RAW = "in_magn_x_raw";
         static const char* IIO_MAG_Y_RAW = "in_magn_y_raw";
@@ -196,9 +200,9 @@ void AccMagSensor::processScanData(Event* evt) {
         lseek(fd_acc_z,0L,SEEK_SET);
 
         // scale sys node is not valid, to meet xTS required range, multiply raw data with 0.0005.
-        evt->u.vec3.x  = atoi(buf_acc_x) * 0.0005;
-        evt->u.vec3.y  = atoi(buf_acc_y) * 0.0005;
-        evt->u.vec3.z  = atoi(buf_acc_z) * 0.0005;
+        evt->u.vec3.x  = atoi(buf_acc_x) * mScale;
+        evt->u.vec3.y  = atoi(buf_acc_y) * mScale;
+        evt->u.vec3.z  = atoi(buf_acc_z) * mScale;
     } else if(mSensorInfo.type == SensorType::MAGNETIC_FIELD) {
         char buf_mag_x[64], buf_mag_y[64], buf_mag_z[64];
 
